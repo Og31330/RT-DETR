@@ -1,0 +1,192 @@
+# ==============================================================================
+# CONFIGURATION GÉNÉRALE ET ÉVALUATION
+# ==============================================================================
+task: detection
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', ]
+
+num_classes: 3              # CUSTOM: 3 classes pour votre dataset
+remap_mscoco_category: False # CORRIGÉ: False pour un dataset personnalisé
+use_focal_loss: True
+eval_spatial_size: [640, 640]
+
+
+# ==============================================================================
+# DÉFINITION DU MODÈLE RT-DETR (Architecture)
+# ==============================================================================
+model: RTDETR
+criterion: RTDETRCriterionv2
+postprocessor: RTDETRPostProcessor
+
+RTDETR:
+  backbone: PResNet
+  encoder: HybridEncoder
+  decoder: RTDETRTransformerv2
+
+PResNet:
+  depth: 18
+  variant: d
+  freeze_at: -1
+  return_idx: [1, 2, 3]
+  num_stages: 4
+  freeze_norm: False
+  pretrained: True
+
+HybridEncoder:
+  in_channels: [128, 256, 512]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  use_encoder_idx: [2]
+  num_encoder_layers: 1
+  nhead: 8
+  dim_feedforward: 1024
+  dropout: 0.0
+  enc_act: gelu
+  expansion: 0.5
+  depth_mult: 1
+  act: silu
+
+RTDETRTransformerv2:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  num_levels: 3
+  num_layers: 3
+  num_queries: 300
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  eval_idx: -1
+  num_points: [4, 4, 4]
+  cross_attn_method: default
+  query_select_method: default
+
+RTDETRPostProcessor:
+  num_top_queries: 300
+
+RTDETRCriterionv2:
+  weight_dict: {'loss_vfl': 1, 'loss_bbox': 5, 'loss_giou': 2}
+  losses: ['vfl', 'boxes']
+  alpha: 0.75
+  gamma: 2.0
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {'cost_class': 2, 'cost_bbox': 5, 'cost_giou': 2}
+    alpha: 0.25
+    gamma: 2.0
+
+
+# ==============================================================================
+# CONFIGURATION DU DATASET ET DU DATALOADER (ENTRAÎNEMENT)
+# ==============================================================================
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    # CHEMIN D'ACCÈS CORRIGÉ VERS VOTRE JEU DE DONNÉES PERSONNEL :
+    img_folder: "E:/nosave/Python/Foosball/src/training/dataset/XStadiumShotsSegmentation.v3i.coco/train"
+    ann_file: "E:/nosave/Python/Foosball/src/training/dataset/XStadiumShotsSegmentation.v3i.coco/train/_annotations.coco.json"
+    return_masks: False
+    transforms:
+      type: Compose
+      ops: # Transformations pour l'entraînement (augmentation et formatage)
+        - type: RandomPhotometricDistort
+          p: 0.5
+        - type: RandomZoomOut
+          fill: 0
+        - type: RandomIoUCrop
+          p: 0.8
+        - type: SanitizeBoundingBoxes
+          min_size: 1
+        - type: RandomHorizontalFlip
+        - type: Resize
+          size: [640, 640]
+        - type: SanitizeBoundingBoxes
+          min_size: 1
+        - type: ConvertPILImage
+          dtype: 'float32'
+          scale: True
+        - type: ConvertBoxes
+          fmt: 'cxcywh'
+          normalize: True
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFuncion
+    scales: null # <-- CORRIGÉ : Utilise null au lieu de 'None' pour le type Python None
+    stop_epoch: 71
+  total_batch_size: 16
+
+# ==============================================================================
+# CONFIGURATION DU DATASET ET DU DATALOADER (VALIDATION)
+# ==============================================================================
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    # CHEMIN D'ACCÈS CORRIGÉ VERS VOTRE JEU DE DONNÉES PERSONNEL :
+    img_folder: "E:/nosave/Python/Foosball/src/training/dataset/XStadiumShotsSegmentation.v3i.coco/valid"
+    ann_file: "E:/nosave/Python/Foosball/src/training/dataset/XStadiumShotsSegmentation.v3i.coco/valid/_annotations.coco.json"
+    return_masks: False
+    transforms:
+      type: Compose
+      ops: # Transformations minimales pour la validation (formatage)
+        - type: Resize
+          size: [640, 640]
+        - type: ConvertPILImage
+          dtype: 'float32'
+          scale: True
+        - type: ConvertBoxes
+          fmt: 'cxcywh'
+          normalize: True
+  shuffle: False
+  num_workers: 4
+  drop_last: False
+  collate_fn:
+    type: BatchImageCollateFuncion
+    # Assurez-vous que 'scales' est null ici aussi si présent, 
+    # ou laissez-le par défaut s'il n'est pas spécifié.
+  total_batch_size: 32
+
+
+# ==============================================================================
+# RUNTIME ET HYPERPARAMÈTRES
+# ==============================================================================
+epoches: 120
+print_freq: 100
+checkpoint_freq: 1
+output_dir: 'E:/nosave/Python/Foosball/src/training/git/RT-DETR/rtdetrv2_pytorch/output'
+summary_dir: null
+
+sync_bn: True
+find_unused_parameters: False
+use_amp: True
+scaler:
+  type: GradScaler
+  enabled: True
+use_ema: True
+ema:
+  type: ModelEMA
+  decay: 0.9999
+  warmups: 2000
+clip_max_norm: 0.1
+
+optimizer:
+  type: AdamW
+  params:
+    - params: '^(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.0
+  lr: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+lr_scheduler:
+  type: MultiStepLR
+  milestones: [1000]
+  gamma: 0.1
+lr_warmup_scheduler:
+  type: LinearWarmup
+  warmup_duration: 2000
